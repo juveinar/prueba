@@ -4,28 +4,58 @@
   connection: local
   gather_facts: false
 
+  vars:
+    endpoints_https:
+      - name: CrowdStrike
+        host: ts01-gyr-maverick.cloudsink.net
+        port: 443
+
+      - name: Claro Cloud VCD
+        host: vcd.clarocloud.com
+        port: 443
+
   tasks:
-    - name: Validar TLS a CrowdStrike por TCP 443
+    - name: Validar TLS por TCP 443
       ansible.builtin.command:
         argv:
           - openssl
           - s_client
           - -connect
-          - ts01-gyr-maverick.cloudsink.net:443
+          - "{{ item.host }}:{{ item.port }}"
           - -servername
-          - ts01-gyr-maverick.cloudsink.net
+          - "{{ item.host }}"
           - -brief
-      register: crowdstrike_tls
+      loop: "{{ endpoints_https }}"
+      loop_control:
+        label: "{{ item.name }} — {{ item.host }}:{{ item.port }}"
+      register: tls_checks
       changed_when: false
+      failed_when: false
 
-    - name: Exigir handshake y validación TLS exitosa
+    - name: Mostrar resultado completo de OpenSSL
+      ansible.builtin.debug:
+        msg:
+          - "Destino: {{ item.item.name }} — {{ item.item.host }}:{{ item.item.port }}"
+          - "Código de retorno: {{ item.rc }}"
+          - "STDOUT: {{ item.stdout | default('') }}"
+          - "STDERR: {{ item.stderr | default('') }}"
+      loop: "{{ tls_checks.results }}"
+      loop_control:
+        label: "{{ item.item.host }}"
+
+    - name: Validar handshake TLS y certificado
       ansible.builtin.assert:
         that:
-          - crowdstrike_tls.rc == 0
-          - "'CONNECTION ESTABLISHED' in crowdstrike_tls.stdout"
-          - "'Verification: OK' in crowdstrike_tls.stdout"
+          - item.rc == 0
+          - "'CONNECTION ESTABLISHED' in ((item.stdout | default('')) ~ '\n' ~ (item.stderr | default('')))"
+          - "'Verification: OK' in ((item.stdout | default('')) ~ '\n' ~ (item.stderr | default('')))"
         fail_msg: >-
-          No fue posible validar una conexión TLS confiable a
-          ts01-gyr-maverick.cloudsink.net:443.
+          Falló la conexión TLS confiable desde AWX hacia
+          {{ item.item.name }} ({{ item.item.host }}:{{ item.item.port }}).
+          Revise la tarea anterior para distinguir DNS, TCP, TLS o cadena de CA.
         success_msg: >-
-          Salida HTTPS validada: TCP/443, TLS y cadena de certificados correctos.
+          Conexión TLS confiable validada desde AWX hacia
+          {{ item.item.name }} ({{ item.item.host }}:{{ item.item.port }}).
+      loop: "{{ tls_checks.results }}"
+      loop_control:
+        label: "{{ item.item.name }} — {{ item.item.host }}:{{ item.item.port }}"
