@@ -1,0 +1,31 @@
+---
+- name: Prueba de salida HTTPS desde AWX
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Validar TLS a CrowdStrike por TCP 443
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - s_client
+          - -connect
+          - ts01-gyr-maverick.cloudsink.net:443
+          - -servername
+          - ts01-gyr-maverick.cloudsink.net
+          - -brief
+      register: crowdstrike_tls
+      changed_when: false
+
+    - name: Exigir handshake y validación TLS exitosa
+      ansible.builtin.assert:
+        that:
+          - crowdstrike_tls.rc == 0
+          - "'CONNECTION ESTABLISHED' in crowdstrike_tls.stdout"
+          - "'Verification: OK' in crowdstrike_tls.stdout"
+        fail_msg: >-
+          No fue posible validar una conexión TLS confiable a
+          ts01-gyr-maverick.cloudsink.net:443.
+        success_msg: >-
+          Salida HTTPS validada: TCP/443, TLS y cadena de certificados correctos.
