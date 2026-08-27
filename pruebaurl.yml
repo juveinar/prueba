@@ -1,5 +1,5 @@
 ---
-- name: Prueba de salida HTTPS desde AWX
+- name: Prueba resumida de salida HTTPS desde AWX
   hosts: localhost
   connection: local
   gather_facts: false
@@ -32,30 +32,88 @@
       changed_when: false
       failed_when: false
 
-    - name: Mostrar resultado completo de OpenSSL
-      ansible.builtin.debug:
-        msg:
-          - "Destino: {{ item.item.name }} — {{ item.item.host }}:{{ item.item.port }}"
-          - "Código de retorno: {{ item.rc }}"
-          - "STDOUT: {{ item.stdout | default('') }}"
-          - "STDERR: {{ item.stderr | default('') }}"
+    - name: Construir resultado resumido por destino
+      ansible.builtin.set_fact:
+        connectivity_summary: >-
+          {{
+            (connectivity_summary | default([])) +
+            [
+              {
+                'name': item.item.name,
+                'host': item.item.host,
+                'port': item.item.port,
+                'rc': item.rc,
+                'output': (
+                  (item.stdout | default('')) ~ '\n' ~
+                  (item.stderr | default(''))
+                ),
+                'connected': (
+                  item.rc == 0 and
+                  'CONNECTION ESTABLISHED' in (
+                    (item.stdout | default('')) ~ '\n' ~
+                    (item.stderr | default(''))
+                  )
+                ),
+                'certificate_valid': (
+                  'Verification: OK' in (
+                    (item.stdout | default('')) ~ '\n' ~
+                    (item.stderr | default(''))
+                  )
+                )
+              }
+            ]
+          }}
       loop: "{{ tls_checks.results }}"
       loop_control:
-        label: "{{ item.item.host }}"
+        label: "{{ item.item.name }}"
 
-    - name: Validar handshake TLS y certificado
+    - name: Mostrar resumen de conectividad
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+          RESUMEN DE CONECTIVIDAD HTTPS DESDE AWX
+          ============================================================
+          {% for item in connectivity_summary %}
+          Destino     : {{ item.name }}
+          URL         : https://{{ item.host }}:{{ item.port }}
+          TCP/TLS     : {{ 'CONECTIVIDAD OK' if item.connected else 'SIN CONECTIVIDAD' }}
+          Certificado : {{ 'VALIDO' if item.certificate_valid else 'NO VALIDADO / ERROR TLS' }}
+          Resultado   : {{
+            'OK - DNS, TCP/443 y TLS validados'
+            if item.connected and item.certificate_valid
+            else 'FALLO - revise el detalle de diagnóstico'
+          }}
+          ------------------------------------------------------------
+          {% endfor %}
+      changed_when: false
+
+    - name: Mostrar diagnóstico solo de destinos con fallo
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+          DIAGNOSTICO DE FALLO: {{ item.name }}
+          ============================================================
+          Host: {{ item.host }}:{{ item.port }}
+          Exit code: {{ item.rc }}
+
+          {{ item.output }}
+      loop: "{{ connectivity_summary }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: not item.connected or not item.certificate_valid
+      changed_when: false
+
+    - name: Fallar el Job si algún destino no es accesible
       ansible.builtin.assert:
         that:
-          - item.rc == 0
-          - "'CONNECTION ESTABLISHED' in ((item.stdout | default('')) ~ '\n' ~ (item.stderr | default('')))"
-          - "'Verification: OK' in ((item.stdout | default('')) ~ '\n' ~ (item.stderr | default('')))"
+          - item.connected
+          - item.certificate_valid
         fail_msg: >-
-          Falló la conexión TLS confiable desde AWX hacia
-          {{ item.item.name }} ({{ item.item.host }}:{{ item.item.port }}).
-          Revise la tarea anterior para distinguir DNS, TCP, TLS o cadena de CA.
+          Falla de conectividad o certificado hacia
+          {{ item.name }}: https://{{ item.host }}:{{ item.port }}.
         success_msg: >-
-          Conexión TLS confiable validada desde AWX hacia
-          {{ item.item.name }} ({{ item.item.host }}:{{ item.item.port }}).
-      loop: "{{ tls_checks.results }}"
+          Conectividad HTTPS correcta hacia
+          {{ item.name }}: https://{{ item.host }}:{{ item.port }}.
+      loop: "{{ connectivity_summary }}"
       loop_control:
-        label: "{{ item.item.name }} — {{ item.item.host }}:{{ item.item.port }}"
+        label: "{{ item.name }} — {{ item.host }}:{{ item.port }}"
