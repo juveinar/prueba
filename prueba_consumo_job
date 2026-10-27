@@ -1,0 +1,33 @@
+---
+- name: Prueba de consumo - job de 90 segundos
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  tasks:
+    - name: Mostrar inicio
+      ansible.builtin.debug:
+        msg: "Inicio en el pod {{ lookup('env', 'HOSTNAME') }}"
+
+    - name: Mantener el pod vivo 90 segundos
+      ansible.builtin.pause:
+        seconds: 90
+
+    - name: Leer pico de memoria del pod (cgroup v2 o v1)
+      ansible.builtin.shell: |
+        cat /sys/fs/cgroup/memory.peak 2>/dev/null || cat /sys/fs/cgroup/memory/memory.max_usage_in_bytes
+      register: mem
+      changed_when: false
+      failed_when: false
+
+    - name: Leer CPU acumulada del pod
+      ansible.builtin.shell: |
+        grep usage_usec /sys/fs/cgroup/cpu.stat 2>/dev/null || cat /sys/fs/cgroup/cpuacct/cpuacct.usage
+      register: cpu
+      changed_when: false
+      failed_when: false
+
+    - name: Mostrar consumo
+      ansible.builtin.debug:
+        msg:
+          - "Memoria pico: {{ ((mem.stdout | default('0')) | int / 1048576) | round(1) }} MiB"
+          - "CPU acumulada (crudo): {{ cpu.stdout | default('n/d') }}"
